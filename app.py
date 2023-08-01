@@ -42,7 +42,7 @@ def message_from_spring_boot():
     mentor_nickname = None
     mentee_nickname = None
     question_origin = None
-    question_summary = None
+    question_summary = None  # 한글 세줄 요약본
 
     try:
         """ Get data from Spring Boot Server """
@@ -59,7 +59,7 @@ def message_from_spring_boot():
     translation_response = translate.translate_text(Text=question_summary, SourceLanguageCode=SOURCE_LANGUAGE_CODE,
                                                     TargetLanguageCode=TARGET_LANGUAGE_CODE)
 
-    # Extract the translated text from the response
+    # Extract the translated text from the response: 영어 세줄 요약본
     translated_text = translation_response['TranslatedText']
 
     """ Connect to MongoDB using PyMongo """
