@@ -65,20 +65,14 @@ def message_from_spring_boot():
     """ Connect to MongoDB using PyMongo """
     mongo_client = get_mongo_client()
     menjil_db = mongo_client['menjil']
-    # qa_collection = menjil_db['qa_list']
-    test_col = menjil_db['chat_message']
+    qa_collection = menjil_db['qa_list']
 
     # Get documents from a collection
     # Filter when mentor_nickname exists and answer is not null
-    # filter_query = {'mentor_nickname': mentor_nickname, 'answer': {'$exists': True, '$ne': None}}
-    # data = []
-    #
-    # for document in qa_collection.find(filter_query):
-    #     data.append(document)
-
-    filter_query = {'sender_nickname': 'mentor1'}
+    filter_query = {'mentor_nickname': mentor_nickname, 'answer': {'$exists': True, '$ne': None}}
     data = []
-    for document in test_col.find(filter_query):
+
+    for document in qa_collection.find(filter_query):
         data.append(document)
 
     print(data)
