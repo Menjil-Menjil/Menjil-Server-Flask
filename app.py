@@ -1,10 +1,11 @@
-from flask import Flask, request, jsonify, render_template
 import boto3  # The AWS SDK for Python
-import config
-from pymongo import MongoClient
-from sentence_transformers import SentenceTransformer, util
+from flask import Flask, request, jsonify, render_template
 from numpy import dot
 from numpy.linalg import norm
+from pymongo import MongoClient
+from sentence_transformers import SentenceTransformer, util
+
+import config
 
 app = Flask(__name__)
 
@@ -49,95 +50,80 @@ def index():
     return render_template('mongo.html', data=results)
 
 
-@app.route('/api/chat/flask', methods=['GET'])
-# @app.route('/api/chat/flask', methods=['POST'])
-#
-# Spring Boot에서 데이터를 받아온다: 멘토 닉네임, 멘티 닉네임, 원본 질문, 세 줄 요약된 질문(by ChatGPT)
-#
+@app.route('/api/chat/flask', methods=['POST'])
 def message_from_spring_boot():
     """ Declare variables """
-    # mentor_nickname = None
-    # mentee_nickname = None
-    # question_origin = None
-    # question_summary = None  # 한글 요약본
-    mentor_nickname = "멘토짱"
-    mentee_nickname = "멘티짱"
-    question_origin = "안녕하세요. 멘티짱 입니다. 풀스택 개발자가 되려면 뭐부터 하는게 좋을까요? 프로젝트는 얼마나 어떻게 해야할까요?"
-    question_summary = "풀스택 개발자가 되려면 뭐부터 하는게 좋을까요? 프로젝트는 얼마나 어떻게 해야할까요?"
+    mentor_nickname = None
+    mentee_nickname = None
+    question_origin = None
+    question_summary = None  # 원본 질문 세 줄 요약본
 
-    # try:
-    #     """ Get data from Spring Boot Server """
-    #     data = request.get_json()
-    #     mentor_nickname = data['mentor_nickname']
-    #     mentee_nickname = data['mentee_nickname']
-    #     question_origin = data['question_origin']
-    #     question_summary = data['question_summary']
-    #
-    # except Exception as e:
-    #     return jsonify({'error': str(e)}), 500
+    try:
+        """ Get data from Spring Boot Server """
+        data = request.get_json()
+        mentor_nickname = data['mentor_nickname']
+        mentee_nickname = data['mentee_nickname']
+        question_origin = data['question_origin']
+        question_summary = data['question_summary']
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-    #
-    # 받아온 데이터 중, 세 줄 요약된 질문을 AWS Translate API를 통해 영어로 번역
-    #
+    """ 받아온 데이터 중, 세 줄 요약된 질문을 AWS Translate API를 통해 영어로 번역 """
     translation_response = translate.translate_text(Text=question_summary, SourceLanguageCode=SOURCE_LANGUAGE_CODE,
                                                     TargetLanguageCode=TARGET_LANGUAGE_CODE)
-    # Extract the translated text from the response: 영어 요약본
-    translated_QS = translation_response['TranslatedText']
 
-    #
-    # MongoDB 연결
-    #
+    """ Extract the translated text from the response """
+    translated_summary_text_en = translation_response['TranslatedText']
+
+    """ Connect MongoDB """
     mongo_client = get_mongo_client()
     menjil_db = mongo_client['menjil']
-    qa_col = menjil_db['qa_list']
+    qa_list_collection = menjil_db['qa_list']
 
-    #
-    # qa_list collection에 접근해서, Spring Boot에서 받아온 정보(멘토 닉네임, 멘티 닉네임, 원본 질문, 세 줄 요약된 질문) 와 영어 번역본을 먼저 저장
-    #
-    send_data = {
+    """qa_list collection에 접근해서, Spring Boot에서 받아온 정보(멘토 닉네임, 멘티 닉네임, 원본 질문, 세 줄 요약된 질문)와 영어 번역본을 먼저 저장"""
+    document = {
+        # 마지막에 붙는 '\n' 제거
         'mentee_nickname': mentee_nickname,
         'mentor_nickname': mentor_nickname,
-        'question_origin': question_origin,
-        'question_summary': question_summary,
-        'question_summary_en': translated_QS,
+        'question_origin': question_origin[:-1] if question_origin.endswith('\n') else question_origin,
+        'question_summary': question_summary[:-1] if question_summary.endswith('\n') else question_summary,
+        'question_summary_en': translated_summary_text_en[:-1] if translated_summary_text_en.endswith('\n')
+        else translated_summary_text_en,
+        'answer': None
     }
-    # 비교를 위하여 기존의 질문을 mongodb에 저장
-    # insert = qa_col.insert_one(send_data)
-    # print(insert)
+    insert = qa_list_collection.insert_one(document)  # save a document
 
-    #
-    # 멘토가 답변한 내역이 있는 문답 데이터를 모두 불러온다.
-    #
-    data = []
-    for document in qa_col.find(
-            {'mentor_nickname': mentor_nickname, 'answer': {'$exists': True, '$ne': None}}, {'question_origin': False}
-    ):
-        data.append(document)
-        # print(document)
-    if len(data) < 1:
-        # 멘토가 받은 질문에 답변한 질문이 하나도 없을 경우 스프링에 에러 전송
-        print("멘토가 답변한 질문이 없습니다")
+    """ 멘토가 답변한 내역이 있는 문답 데이터를 모두 불러온다 """
+    filter_ = {
+        'mentor_nickname': mentor_nickname,
+        'answer': {'$exists': True, '$ne': None}
+    }
+    projection_ = {
+        'mentee_nickname': False,
+        'mentor_nickname': False,
+        'question_origin': False
+    }
+    # Retrieve the documents and store them in the data list
+    data = list(qa_list_collection.find(filter_, projection_))
+    print('data: ', data)
 
-    #
-    # 세 줄 요약된 질문들을 영어로 각각 번역
-    #
-    '''(패스)이미 저장할 때 번역함'''
+    """ 답변 개수가 3개 미만일 경우, 빈 리스트를 Spring Boot로 리턴"""
+    if len(data) < 3:
+        return []
 
-    #
-    # 문장 유사도 검증
-    #
-    # 1. 유사도 계산
-    data_QSE_list = [doc['question_summary_en'] for doc in data]
-    for idx, qe in enumerate(data_QSE_list):
-        print(f'질문{idx + 1}: {qe}')
+    """ 문장 유사도 검증 """
+    """ 1. 유사도 검사"""
+    question_summary_en_list = [doc['question_summary_en'] for doc in data]
+    # for idx, qe in enumerate(question_summary_en_list):
+    #     print(f'질문{idx + 1}: {qe}')
+
     model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-    query_embedding = model.encode(translated_QS)
-    passage_embedding = model.encode(data_QSE_list)
+    query_embedding = model.encode(translated_summary_text_en)
+    passage_embedding = model.encode(question_summary_en_list)
     dot_score = util.dot_score(query_embedding, passage_embedding)
     dot_score_list = dot_score.tolist()[0]
-    # print("Similarity:", dot_score_list)
 
-    # 2. 계산된 데이터 중 유사도 상위 3개 데이터 추출
+    """ 2. 계산된 데이터 중 유사도 상위 3개 데이터 추출 """
     similarity_list = [{'similarity': -1.0}, {'similarity': -1.0}, {'similarity': -1.0}]
     for doc, score in zip(data, dot_score_list):
         doc['similarity'] = score
@@ -146,22 +132,25 @@ def message_from_spring_boot():
             idx_min = sim_list.index(min(sim_list))
             similarity_list[idx_min] = doc
 
-    # 3. 유사도 점수가 기준 점수(SIMILARITY_CRITERION_POINT) 이하인 데이터 삭제
+    """ 3. 유사도 점수가 기준 점수(SIMILARITY_CRITERION_POINT) 이하인 데이터 삭제 """
     result_similarity_list = []
     for doc in similarity_list:
         if doc['similarity'] > SIMILARITY_CRITERION_POINT:
             result_similarity_list.append(doc)
-    print("---------------유사도 상위 3개 데이터---------------")
-    for doc in result_similarity_list:
-        print(doc)
 
+    # 유사도 상위 3개의 데이터 출력
+    # print(result_similarity_list)
 
-    #
-    # 기존의 질문을 mongodb에 저장하고, 답변이 올 때까지 기다린다. 답변 오면 update 처리 <- 이건 스프링 부트에서.
-    #
-    # 1. 클라이언트가 1,2,3 유사도 질문으로 만족 혹은 만족을 못해서 직접 질문을 등록하는 상태 결과를 스프링에서 받음
-    return jsonify({'error': 'ho'})
-    # 2. 질문을 직접 등록하면 위에서 저장한 채로 넘어가고 만족을 했다면 클라이언트의 저장된 질문 데이터를 삭제
+    """ 요약된 질문과 답변을 DTO로 담아서 Spring Boot로 전달한다. """
+    # List of DTOs
+    data_list = []
+    for i in result_similarity_list:
+        dict_ = dict()
+        dict_['question_summary'] = i.get('question_summary')
+        dict_['answer'] = i.get('answer')
+        data_list.append(dict_)
+
+    return data_list
 
 
 if __name__ == '__main__':
