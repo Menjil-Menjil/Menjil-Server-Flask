@@ -40,16 +40,6 @@ def cos_sim(num1, num2):
     return dot(num1, num2) / (norm(num1) * norm(num2))
 
 
-@app.route('/')
-def index():
-    mongo_client = get_mongo_client()
-    menjil_db = mongo_client['menjil']
-    qa_col = menjil_db['qa_list']
-    results = qa_col.find()
-
-    return render_template('mongo.html', data=results)
-
-
 @app.route('/api/chat/flask', methods=['POST'])
 def message_from_spring_boot():
     """ Declare variables """
