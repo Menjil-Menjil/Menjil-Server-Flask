@@ -90,7 +90,7 @@ def lambda_handler(event, context):
     # for idx, qe in enumerate(question_summary_en_list):
     #     print(f'질문{idx + 1}: {qe}')
 
-    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', cache_folder='/tmp')
     query_embedding = model.encode(translated_summary_text_en, convert_to_tensor=True)
     passage_embedding = model.encode(question_summary_en_list, convert_to_tensor=True)
 
