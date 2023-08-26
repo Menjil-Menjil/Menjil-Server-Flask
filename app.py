@@ -1,26 +1,16 @@
 import boto3  # The AWS SDK for Python
-from flask import Flask, request, jsonify, render_template
-from numpy import dot
-from numpy.linalg import norm
 from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer, util
 
 import config
-
-app = Flask(__name__)
+import os
 
 # Declare a constant variable
 TARGET_LANGUAGE_CODE = 'en'
 SOURCE_LANGUAGE_CODE = 'ko'
 
-# 유사도 기준 점수
-SIMILARITY_CRITERION_POINT = -0.01
-
-# Configure AWS Translate client
-translate = boto3.client(service_name='translate',
-                         aws_access_key_id=config.AWS_ACCESS_KEY_ID,
-                         aws_secret_access_key=config.AWS_SECRET_ACCESS_KEY,
-                         region_name=config.AWS_SEOUL_REGION)
+# Similarity Criterion Percent
+SIMILARITY_CRITERION_PERCENT = 10
 
 
 def get_mongo_client():
@@ -30,33 +20,30 @@ def get_mongo_client():
     port = config.MONGODB_PORT
 
     # Create a MongoDB connection URI
-    mongo_uri = f"mongodb://{username}:{password}@{host}:{port}/"
+    mongo_uri = f'mongodb://{username}:{password}@{host}:{port}/'
 
     # Create the MongoDB client and return it
     return MongoClient(mongo_uri)
 
 
-def cos_sim(num1, num2):
-    return dot(num1, num2) / (norm(num1) * norm(num2))
+def cosine_similarity_to_percent_general(cosine_similarity):
+    normalized_value = (cosine_similarity + 1) / 2
+    return normalized_value * 100
 
 
-@app.route('/api/chat/flask', methods=['POST'])
-def message_from_spring_boot():
-    """ Declare variables """
-    mentor_nickname = None
-    mentee_nickname = None
-    question_origin = None
-    question_summary = None  # 원본 질문 세 줄 요약본
+def lambda_handler(event, context):
+    os.environ['TRANSFORMERS_CACHE'] = "/tmp"
 
-    try:
-        """ Get data from Spring Boot Server """
-        data = request.get_json()
-        mentor_nickname = data['mentor_nickname']
-        mentee_nickname = data['mentee_nickname']
-        question_origin = data['question_origin']
-        question_summary = data['question_summary']
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    # Configure AWS Translate client
+    translate = boto3.client(service_name='translate',
+                             aws_access_key_id=config.AWS_ACCESS_KEY_ID,
+                             aws_secret_access_key=config.AWS_SECRET_ACCESS_KEY,
+                             region_name=config.AWS_SEOUL_REGION)
+
+    mentor_nickname = event['mentor_nickname']
+    mentee_nickname = event['mentee_nickname']
+    question_origin = event['question_origin']
+    question_summary = event['question_summary']
 
     """ 받아온 데이터 중, 세 줄 요약된 질문을 AWS Translate API를 통해 영어로 번역 """
     translation_response = translate.translate_text(Text=question_summary, SourceLanguageCode=SOURCE_LANGUAGE_CODE,
@@ -93,13 +80,9 @@ def message_from_spring_boot():
         'mentor_nickname': False,
         'question_origin': False
     }
-    # Retrieve the documents and store them in the data list
+    # Retrieve the documents and store them in the data(list)
     data = list(qa_list_collection.find(filter_, projection_))
     print('data: ', data)
-
-    """ 답변 개수가 3개 미만일 경우, 빈 리스트를 Spring Boot로 리턴"""
-    if len(data) < 3:
-        return []
 
     """ 문장 유사도 검증 """
     """ 1. 유사도 검사"""
@@ -108,40 +91,49 @@ def message_from_spring_boot():
     #     print(f'질문{idx + 1}: {qe}')
 
     model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-    query_embedding = model.encode(translated_summary_text_en)
-    passage_embedding = model.encode(question_summary_en_list)
-    dot_score = util.dot_score(query_embedding, passage_embedding)
-    dot_score_list = dot_score.tolist()[0]
+    query_embedding = model.encode(translated_summary_text_en, convert_to_tensor=True)
+    passage_embedding = model.encode(question_summary_en_list, convert_to_tensor=True)
+
+    # Use Cosine Similarity
+    cos_score = util.cos_sim(query_embedding, passage_embedding)
+    # Normalize
+    cos_score_percent = cosine_similarity_to_percent_general(cos_score)
+    cos_score_percent_list = cos_score_percent.tolist()[0]
 
     """ 2. 계산된 데이터 중 유사도 상위 3개 데이터 추출 """
-    similarity_list = [{'similarity': -1.0}, {'similarity': -1.0}, {'similarity': -1.0}]
-    for doc, score in zip(data, dot_score_list):
-        doc['similarity'] = score
-        sim_list = [d['similarity'] for d in similarity_list]
+    similarity_list = [{'similarity_percent': 0}, {'similarity_percent': 0}, {'similarity_percent': 0}]
+    for doc, score in zip(data, cos_score_percent_list):
+        doc['similarity_percent'] = score
+        sim_list = [d['similarity_percent'] for d in similarity_list]
         if score > min(sim_list):
             idx_min = sim_list.index(min(sim_list))
             similarity_list[idx_min] = doc
 
     """ 3. 유사도 점수가 기준 점수(SIMILARITY_CRITERION_POINT) 이하인 데이터 삭제 """
-    result_similarity_list = []
-    for doc in similarity_list:
-        if doc['similarity'] > SIMILARITY_CRITERION_POINT:
-            result_similarity_list.append(doc)
+    # result_similarity_list = []
+    # for doc in similarity_list:
+    #     if doc['similarity_percent'] > SIMILARITY_CRITERION_PERCENT:
+    #         result_similarity_list.append(doc)
 
     # 유사도 상위 3개의 데이터 출력
     # print(result_similarity_list)
 
-    """ 요약된 질문과 답변을 DTO로 담아서 Spring Boot로 전달한다. """
+    """ 결과가 3개 미만일 경우, 빈 리스트를 Spring Boot로 리턴"""
+    if len(similarity_list) < 3:
+        return []
+
+    """ 요약된 질문과 답변을 DTO로 담아서 리턴(Spring Boot로 전달) """
     # List of DTOs
     data_list = []
-    for i in result_similarity_list:
+    for i in similarity_list:
         dict_ = dict()
         dict_['question_summary'] = i.get('question_summary')
         dict_['answer'] = i.get('answer')
+        dict_['similarity_percent'] = round(i.get('similarity_percent'), 2)  # Rounded to 2 decimal places
         data_list.append(dict_)
+        print(dict_)
+
+    # Sort the data_list by 'similarity_percent' in descending order
+    data_list = sorted(data_list, key=lambda x: x['similarity_percent'], reverse=True)
 
     return data_list
-
-
-if __name__ == '__main__':
-    app.run(debug=True)
