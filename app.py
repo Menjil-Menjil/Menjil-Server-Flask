@@ -1,6 +1,7 @@
 import boto3  # The AWS SDK for Python
 from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer, util
+from datetime import datetime
 
 import config
 import os
@@ -44,6 +45,7 @@ def lambda_handler(event, context):
     mentee_nickname = event['mentee_nickname']
     question_origin = event['question_origin']
     question_summary = event['question_summary']
+    question_time = datetime.now()  # 데이터를 받은 시간을, 질문이 입력된 시간으로 설정
 
     """ 받아온 데이터 중, 세 줄 요약된 질문을 AWS Translate API를 통해 영어로 번역 """
     translation_response = translate.translate_text(Text=question_summary, SourceLanguageCode=SOURCE_LANGUAGE_CODE,
@@ -64,9 +66,11 @@ def lambda_handler(event, context):
         'mentor_nickname': mentor_nickname,
         'question_origin': question_origin[:-1] if question_origin.endswith('\n') else question_origin,
         'question_summary': question_summary[:-1] if question_summary.endswith('\n') else question_summary,
-        'question_summary_en': translated_summary_text_en[:-1] if translated_summary_text_en.endswith('\n')
-        else translated_summary_text_en,
-        'answer': None
+        'question_summary_en': translated_summary_text_en[:-1]
+        if translated_summary_text_en.endswith('\n') else translated_summary_text_en,
+        'question_time': question_time,
+        'answer': None,
+        'answer_time': None
     }
     insert = qa_list_collection.insert_one(document)  # save a document
 
@@ -89,6 +93,10 @@ def lambda_handler(event, context):
     question_summary_en_list = [doc['question_summary_en'] for doc in data]
     # for idx, qe in enumerate(question_summary_en_list):
     #     print(f'질문{idx + 1}: {qe}')
+
+    """ 1-1. 기존에 데이터가 3개 미만으로 존재할 경우, 아래 과정을 거치지 않고 바로 빈 리스트 리턴"""
+    if len(question_summary_en_list) < 3:
+        return []
 
     model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', cache_folder='/tmp')
     query_embedding = model.encode(translated_summary_text_en, convert_to_tensor=True)
