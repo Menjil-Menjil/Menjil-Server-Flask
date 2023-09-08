@@ -2,6 +2,7 @@ import boto3  # The AWS SDK for Python
 from flask import Flask, request, jsonify
 from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer, util
+from datetime import datetime
 import config
 
 app = Flask(__name__)
@@ -38,13 +39,14 @@ def cosine_similarity_to_percent_general(cosine_similarity):
     return normalized_value * 100
 
 
-@app.route('/api/chat/flask', methods=['POST'])
+@app.route('/api/lambda/question', methods=['POST'])
 def message_from_spring_boot():
     """ Declare variables """
     mentor_nickname = None
     mentee_nickname = None
     question_origin = None
     question_summary = None  # 원본 질문 세 줄 요약본
+    question_time = None
 
     try:
         """ Get data from Spring Boot Server """
@@ -53,6 +55,8 @@ def message_from_spring_boot():
         mentee_nickname = data['mentee_nickname']
         question_origin = data['question_origin']
         question_summary = data['question_summary']
+        question_time = datetime.now()  # 데이터를 받은 시간을, 질문이 입력된 시간으로 설정
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -75,9 +79,11 @@ def message_from_spring_boot():
         'mentor_nickname': mentor_nickname,
         'question_origin': question_origin[:-1] if question_origin.endswith('\n') else question_origin,
         'question_summary': question_summary[:-1] if question_summary.endswith('\n') else question_summary,
-        'question_summary_en': translated_summary_text_en[:-1] if translated_summary_text_en.endswith('\n')
-        else translated_summary_text_en,
-        'answer': None
+        'question_summary_en': translated_summary_text_en[:-1]
+        if translated_summary_text_en.endswith('\n') else translated_summary_text_en,
+        'question_time': question_time,
+        'answer': None,
+        'answer_time': None
     }
     insert = qa_list_collection.insert_one(document)  # save a document
 
@@ -100,6 +106,10 @@ def message_from_spring_boot():
     question_summary_en_list = [doc['question_summary_en'] for doc in data]
     # for idx, qe in enumerate(question_summary_en_list):
     #     print(f'질문{idx + 1}: {qe}')
+
+    """ 기존에 데이터가 3개 미만으로 존재할 경우, 빈 리스트 리턴"""
+    if len(question_summary_en_list) < 3:
+        return []
 
     model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
     query_embedding = model.encode(translated_summary_text_en, convert_to_tensor=True)
