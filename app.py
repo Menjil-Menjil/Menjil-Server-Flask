@@ -114,7 +114,7 @@ def lambda_handler(event, context):
     """ 2. 계산된 데이터 중 유사도 상위 3개 데이터 추출 """
     """ 데이터가 1개 이상 3개 미만인 경우도 처리 """
     # cos_score_percent_list의 길이를 기반으로 similarity_list의 초기 크기 설정
-    initial_length = len(cos_score_percent_list)
+    initial_length = min(3, len(cos_score_percent_list))
     similarity_list = [{'similarity_percent': 0} for _ in range(initial_length)]
     for doc, score in zip(data, cos_score_percent_list):
         doc['similarity_percent'] = score
