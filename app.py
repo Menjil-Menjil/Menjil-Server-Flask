@@ -94,8 +94,11 @@ def lambda_handler(event, context):
     # for idx, qe in enumerate(question_summary_en_list):
     #     print(f'질문{idx + 1}: {qe}')
 
-    """ 1-1. 기존에 데이터가 3개 미만으로 존재할 경우, 아래 과정을 거치지 않고 바로 빈 리스트 리턴"""
-    if len(question_summary_en_list) < 3:
+    # """ 기존에 데이터가 3개 미만으로 존재할 경우, 빈 리스트 리턴"""
+    # if len(question_summary_en_list) < 3:
+    #     return []
+    """ 가져온 데이터의 개수가 0개인 경우, 빈 리스트를 리턴 """
+    if len(question_summary_en_list) < 1:
         return []
 
     model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', cache_folder='/tmp')
@@ -109,7 +112,10 @@ def lambda_handler(event, context):
     cos_score_percent_list = cos_score_percent.tolist()[0]
 
     """ 2. 계산된 데이터 중 유사도 상위 3개 데이터 추출 """
-    similarity_list = [{'similarity_percent': 0}, {'similarity_percent': 0}, {'similarity_percent': 0}]
+    """ 데이터가 1개 이상 3개 미만인 경우도 처리 """
+    # cos_score_percent_list의 길이를 기반으로 similarity_list의 초기 크기 설정
+    initial_length = len(cos_score_percent_list)
+    similarity_list = [{'similarity_percent': 0} for _ in range(initial_length)]
     for doc, score in zip(data, cos_score_percent_list):
         doc['similarity_percent'] = score
         sim_list = [d['similarity_percent'] for d in similarity_list]
@@ -123,18 +129,12 @@ def lambda_handler(event, context):
     #     if doc['similarity_percent'] > SIMILARITY_CRITERION_PERCENT:
     #         result_similarity_list.append(doc)
 
-    # 유사도 상위 3개의 데이터 출력
-    # print(result_similarity_list)
-
-    """ 결과가 3개 미만일 경우, 빈 리스트를 Spring Boot로 리턴"""
-    if len(similarity_list) < 3:
-        return []
-
     """ 요약된 질문과 답변을 DTO로 담아서 리턴(Spring Boot로 전달) """
     # List of DTOs
     data_list = []
     for i in similarity_list:
         dict_ = dict()
+        dict_['question_id'] = str(i.get('_id'))  # 이 부분 주의. MongoDB에서 _id 값을 str로 parsing하는 과정 필요.
         dict_['question_summary'] = i.get('question_summary')
         dict_['answer'] = i.get('answer')
         dict_['similarity_percent'] = round(i.get('similarity_percent'), 2)  # Rounded to 2 decimal places
