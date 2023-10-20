@@ -1,0 +1,77 @@
+name: Deploy Flask Server To AWS EC2
+
+on:
+  push:
+    branches: [ "flask-deploy-test" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: create config.py
+        shell: bash
+        run: |
+          touch ./config.py
+          echo "${{secrets.APPLICATION_CONFIG}}" > ./config.py 
+
+       ## Docker
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ secrets.DOCKERHUB_REPO_FLASK }}:latest
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get Github Action's ip address
+        id: ip
+        uses: haythem/public-ip@v1.3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Add Github Action's ip address to Security Group
+        run: aws ec2 authorize-security-group-ingress --group-id ${{ secrets.AWS_SECURITY_GROUP_ID }} --protocol tcp --port 22 --cidr ${{ steps.ip.outputs.ipv4 }}/32
+
+      - name: connect EC2 instance and deploy docker images to develop server
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.AWS_EC2_HOST_IP }}
+          username: ${{ secrets.AWS_EC2_USERNAME }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+
+          ## kill container -> remove container -> remove image -> pull new image -> run
+          script: |
+            sudo docker kill ${{ secrets.PROJECT_NAME_FLASK }}  
+            sudo docker rm ${{ secrets.PROJECT_NAME_FLASK }} 
+            sudo docker rmi ${{ secrets.DOCKERHUB_REPO_FLASK }}
+            
+            sudo docker pull ${{ secrets.DOCKERHUB_REPO_FLASK }}:latest
+            sudo docker run -d --name ${{ secrets.PROJECT_NAME_DEV }} -p 5000:5000 ${{ secrets.DOCKERHUB_REPO_FLASK }}:latest
+
+      - name: Remove Github Action's ip address from Security Group
+        run: aws ec2 revoke-security-group-ingress --group-id ${{ secrets.AWS_SECURITY_GROUP_ID }} --protocol tcp --port 22 --cidr ${{ steps.ip.outputs.ipv4 }}/32
